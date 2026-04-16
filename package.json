@@ -1,0 +1,8 @@
+{
+  "name": "posting-bot",
+  "version": "1.0.0",
+  "main": "posting_bot.js",
+  "scripts": {
+    "start": "node posting_bot.js"
+  }
+}
