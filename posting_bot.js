@@ -69,7 +69,7 @@ ${STYLE_EXAMPLES}
 Напиши только сам пост, ничего лишнего.`;
 
   const result = await apiRequest('api.anthropic.com', '/v1/messages', {
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-6',
     max_tokens: 500,
     messages: [{ role: 'user', content: prompt }]
   });
