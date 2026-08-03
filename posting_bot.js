@@ -38,6 +38,7 @@ function apiRequest(hostname, path, data) {
       opts.headers['anthropic-version'] = '2023-06-01';
     }
     const req = https.request(opts, res => {
+      res.setEncoding('utf8');
       let d = '';
       res.on('data', c => d += c);
       res.on('end', () => resolve(JSON.parse(d)));
