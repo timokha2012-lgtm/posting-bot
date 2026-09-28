@@ -1,29 +1,98 @@
+// Утренний бот 8:00 МСК для @go_rehab и @Helpforaddicts
+// Формат меняется по дням недели, тема — по дню года (не повторяется ~2 месяца),
+// призыв к действию — не каждый день и в разные места.
 const https = require('https');
 
 const TG_TOKEN = process.env.TG_TOKEN;
 const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
-const CHANNELS = ['@go_rehab', '@Helpforaddicts'];
+const CHANNELS = (process.env.CHANNELS || '@go_rehab,@Helpforaddicts').split(',');
+const DIAG_BOT = process.env.DIAG_BOT || '@ya_lichnost_bot';
+const CONSULT_URL = process.env.CONSULT_URL || 'https://psiholog-petrov.ru';
+const MODEL = process.env.MODEL || 'claude-sonnet-4-6';
+const POST_HOUR = Number(process.env.POST_HOUR || 8);
 
-const STYLE_EXAMPLES = `
-14 апреля: Ты пытаешься всё контролировать, потому что внутри давно нет чувства опоры. И кажется: если отпущу — всё развалится. Но правда в том, что ты уже на пределе. Контроль не спасает, он просто оттягивает срыв. Иногда отпускание — это не слабость, а способ выжить. И доверие начинается с маленьких шагов. У тебя все получится, главное верь ✨
-
-15 апреля: Ты ищешь смысл, но устаёшь от самого поиска. Как будто ответ должен прийти сразу и навсегда. Но смысл не даётся целиком. Он собирается по кускам: в действиях, в выборе, в честности. Даже если ты просто не сдаёшься сегодня — это уже часть смысла. Жизнь не объясняется сразу, она раскрывается постепенно. У тебя все получится, главное верь ✨
-
-16 апреля: Ты живёшь как будто в чужом сценарии. Делаешь «как надо», а внутри пусто и тихо. И самое неприятное — ты уже это понимаешь. Если возникает мысль «это не моя жизнь», значит твоя уже стучится изнутри. Страшно её услышать, потому что придётся менять. Но игнорировать — дороже. У тебя все получится, главное верь ✨`;
-
+// Темы — не абстракции, а узнаваемые утренние ситуации
 const TOPICS = [
-  'контроль и доверие', 'поиск смысла', 'чужая жизнь', 'тянешь на себе',
-  'не можешь остановиться', 'зарабатываешь любовь', 'молчишь о важном',
-  'быть сильным', 'страх перемен', 'одиночество в толпе', 'стыд и вина',
-  'злость которую прячешь', 'усталость от борьбы', 'надежда', 'прощение себя',
-  'отношения которые выматывают', 'границы', 'зависимость от чужого мнения',
-  'страх быть собой', 'внутренний критик', 'депрессия и пустота', 'тревога',
-  'восстановление после срыва', 'доверие к Богу', 'новое начало'
+  'проснулся и первая мысль — «опять»',
+  'проверяешь телефон, не написал ли он(а)',
+  'обещал себе вчера — и уже ищешь оправдание',
+  'улыбаешься на работе, а внутри выжжено',
+  'мать звонит — и ты заранее напрягаешься',
+  'считаешь дни трезвости как долг, а не как жизнь',
+  'злишься на близкого за то, что он опять «не такой»',
+  'спасаешь всех, кроме себя',
+  'стыдно за вчерашний разговор',
+  'ждёшь, что Бог сделает то, что должен сделать ты',
+  'делаешь вид, что всё под контролем',
+  'боишься, что без старых друзей станет скучно',
+  'устал быть сильным для семьи',
+  'сравниваешь себя с теми, у кого получилось',
+  'живёшь «после»: после зарплаты, после ремонта, после него',
+  'прячешь бутылку, деньги, переписку',
+  'хочешь позвонить, но гордость не даёт',
+  'говоришь «я просто устал» вместо «мне плохо»',
+  'срыв был месяц назад, а ты до сих пор себя казнишь',
+  'пустота по утрам, пока не займёшь руки',
+  'зарабатываешь любовь услугами',
+  'в церковь ходишь, а внутри ничего не меняется',
+  'боишься отпустить взрослого сына',
+  'ненавидишь в себе отца',
+  'кажется, что поздно начинать',
+  'молчишь, чтобы не было скандала',
+  'ждёшь, что он сам захочет лечиться',
+  'снова начал «с понедельника»',
+  'говоришь «я не такой, как они» на группе',
+  'не можешь сказать «нет» и потом злишься',
+  'просыпаешься с тревогой без причины',
+  'всё время думаешь, что о тебе подумают',
+  'тоскуешь по старой жизни, хотя она тебя убивала',
+  'не веришь, что тебя можно простить',
 ];
 
-function getTodayTopic() {
-  const day = new Date().getDate();
-  return TOPICS[day % TOPICS.length];
+// Формат по дню недели (0 = воскресенье)
+const FORMATS = {
+  1: { name: 'СЦЕНА', how: 'Начни с конкретной сцены утра: что человек делает руками, что видит, что говорит. Потом назови механизм, который стоит за сценой (отрицание, контроль, стыд, рационализация, созависимость). Закончи одним действием на сегодня — таким, которое можно сделать до обеда.' },
+  2: { name: 'ФРАЗА-САМООБМАН', how: 'Начни с фразы, которой человек себя обманывает, в кавычках, как он её говорит. Разбери, что она на самом деле прикрывает. Без морали — просто сними маску. Закончи вопросом, на который неприятно отвечать честно.' },
+  3: { name: 'ДЛЯ БЛИЗКИХ', how: 'Пост для жены, матери, отца зависимого. Сцена из их утра. Покажи, где их любовь превратилась в контроль или спасательство. Одно действие: что перестать делать сегодня.' },
+  4: { name: 'БИБЛЕЙСКОЕ ЗЕРКАЛО', how: 'Возьми одного библейского героя, в котором читатель узнает себя именно в этой теме (не пересказывай историю, одна деталь из неё). Сначала человек и его боль, герой — не раньше третьего абзаца. Без номеров глав, без проповеди.' },
+  5: { name: 'ВОПРОС', how: 'Весь пост ведёт к одному точному вопросу. Сначала короткая ситуация, потом два-три абзаца, которые отрезают удобные ответы. Вопрос — последней строкой перед призывом.' },
+  6: { name: 'ОДИН ШАГ', how: 'Практический пост: один конкретный шаг на выходные по теме. Как именно его сделать, что будет мешать, что сказать себе, когда захочется бросить.' },
+  0: { name: 'БЛАГОДАТЬ', how: 'Тихий воскресный пост. Про то, что человеку не нужно заслуживать право начать заново. Без сладости и «Бог тебя любит». Через конкретную сцену и одну мысль.' },
+};
+
+// Призыв — не каждый день, в разные места
+const CTAS = {
+  1: `Последней строкой мягко предложи пройти короткую диагностику в ${DIAG_BOT} — «посмотреть, где ты сейчас на самом деле». Одна фраза.`,
+  2: 'Без призыва. Пост заканчивается вопросом.',
+  3: `Последней строкой скажи, что для близких зависимых есть консультация: ${CONSULT_URL}. Одна фраза, без рекламного тона.`,
+  4: 'Без призыва.',
+  5: `Последней строкой предложи ответить на вопрос честно — в ${DIAG_BOT} есть разбор, который поможет. Одна фраза.`,
+  6: 'Предложи написать в комментариях, какой шаг человек выбрал. Одна фраза.',
+  0: 'Без призыва.',
+};
+
+const BANNED = [
+  'У тебя все получится', 'главное верь', 'ты не один', 'ты не одна', 'это нормально',
+  'маленькими шагами', 'маленькие шаги', 'путь к себе', 'внутри пусто', 'важно помнить',
+  'Бог тебя любит', 'всё будет хорошо', 'стучится изнутри', 'правда в том, что',
+  'и это нормально', 'дай себе время', 'ты достоин',
+];
+
+function getMoscowNow() {
+  const now = new Date();
+  return new Date(now.getTime() + now.getTimezoneOffset() * 60000 + 3 * 3600000);
+}
+
+function dayOfYear(d) {
+  return Math.floor((d - new Date(d.getFullYear(), 0, 0)) / 86400000);
+}
+
+function todayPlan() {
+  const m = getMoscowNow();
+  const wd = m.getDay();
+  // шаг 7 взаимно прост с 34 — темы идут вразнобой и не совпадают с тем же форматом неделями
+  const topic = TOPICS[(dayOfYear(m) * 7) % TOPICS.length];
+  return { topic, format: FORMATS[wd], cta: CTAS[wd] };
 }
 
 function apiRequest(hostname, path, data) {
@@ -31,7 +100,7 @@ function apiRequest(hostname, path, data) {
     const body = JSON.stringify(data);
     const opts = {
       hostname, path, method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
     };
     if (hostname === 'api.anthropic.com') {
       opts.headers['x-api-key'] = ANTHROPIC_KEY;
@@ -40,8 +109,10 @@ function apiRequest(hostname, path, data) {
     const req = https.request(opts, res => {
       res.setEncoding('utf8');
       let d = '';
-      res.on('data', c => d += c);
-      res.on('end', () => resolve(JSON.parse(d)));
+      res.on('data', c => (d += c));
+      res.on('end', () => {
+        try { resolve(JSON.parse(d)); } catch (e) { reject(new Error('Bad JSON: ' + d.slice(0, 200))); }
+      });
     });
     req.on('error', reject);
     req.write(body);
@@ -50,94 +121,76 @@ function apiRequest(hostname, path, data) {
 }
 
 async function generatePost() {
-  const topic = getTodayTopic();
-  const date = new Date().toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
-  
-  const prompt = `Ты — автор психологического Telegram канала для людей в реабилитации от зависимости. Напиши пост на тему «${topic}» в точно таком же стиле как эти примеры:
+  const { topic, format, cta } = todayPlan();
 
-${STYLE_EXAMPLES}
+  const system = `Ты пишешь утренние посты для Telegram-канала Дмитрия Петрова — реабилитолога, который ведёт центр для зависимых. Читатели: зависимые, их близкие, люди в кризисе, верующие и нет. Читают в 8 утра с телефона, полусонные.
 
-Правила стиля:
-- Начни сразу с обращения на "ты" без приветствия
-- 5-7 коротких предложений
-- Каждый абзац — одна мысль
-- Психологическая глубина без пафоса
-- Разговорный язык, как умный друг
-- Заканчивай точно этой фразой: "У тебя все получится, главное верь ✨"
-- НЕ используй хэштеги
-- НЕ пиши дату в тексте
+Голос: как умный друг, который сам через это прошёл и не боится сказать правду. Прямо, на «ты», без пафоса, без утешительства, без проповеди.
 
-Напиши только сам пост, ничего лишнего.`;
+Жёсткие правила:
+- 60–110 слов. Абзацы по 1–2 предложения.
+- Первая строка — сразу в ситуацию или в фразу. Никаких «Доброе утро», «Сегодня поговорим».
+- Одна мысль на пост.
+- Конкретика вместо абстракций: не «ты чувствуешь пустоту», а «ты открываешь холодильник, закрываешь, открываешь снова».
+- Назови психологический механизм простыми словами, без терминов в лоб.
+- Никаких хэштегов, эмодзи, дат, заголовков, markdown и звёздочек.
+- Запрещённые фразы и их перепевы: ${BANNED.join('; ')}.
+- Не заканчивай утешением. Заканчивай действием, вопросом или честной мыслью.`;
+
+  const user = `Тема утра: «${topic}».
+Формат: ${format.name}. ${format.how}
+Призыв: ${cta}
+
+Напиши только текст поста.`;
 
   const result = await apiRequest('api.anthropic.com', '/v1/messages', {
-    model: 'claude-sonnet-4-6',
-    max_tokens: 500,
-    messages: [{ role: 'user', content: prompt }]
+    model: MODEL,
+    max_tokens: 600,
+    temperature: 1,
+    system,
+    messages: [{ role: 'user', content: user }],
   });
-  
-  return result.content.map(i => i.text || '').join('').trim();
+
+  if (!result.content) throw new Error('Anthropic: ' + JSON.stringify(result).slice(0, 300));
+  let text = result.content.map(i => i.text || '').join('').trim();
+  text = text.replace(/\*\*/g, '').replace(/#\S+/g, '').trim();
+  return { text, topic, format: format.name };
 }
 
 async function sendToChannel(channelId, text) {
-  return apiRequest('api.telegram.org', `/bot${TG_TOKEN}/sendMessage`, {
-    chat_id: channelId,
-    text: text,
-    parse_mode: 'HTML'
-  });
+  // без parse_mode: символы < > & в тексте не ломают отправку
+  return apiRequest('api.telegram.org', `/bot${TG_TOKEN}/sendMessage`, { chat_id: channelId, text });
 }
 
-async function postToAll() {
-  console.log('Генерирую пост...');
+async function postToAll({ dryRun = false } = {}) {
   try {
     const post = await generatePost();
-    console.log('Пост готов:', post.substring(0, 50) + '...');
-    
+    console.log(`[${post.format}] ${post.topic}\n---\n${post.text}\n---`);
+    if (dryRun) return;
     for (const channel of CHANNELS) {
-      const result = await sendToChannel(channel, post);
-      if (result.ok) {
-        console.log(`✅ Отправлено в ${channel}`);
-      } else {
-        console.log(`❌ Ошибка в ${channel}:`, result.description);
-      }
+      const r = await sendToChannel(channel.trim(), post.text);
+      console.log(r.ok ? `✅ ${channel}` : `❌ ${channel}: ${r.description}`);
     }
-  } catch(e) {
+  } catch (e) {
     console.error('Ошибка:', e.message);
   }
 }
 
-function getMoscowHour() {
-  const now = new Date();
-  const utc = now.getTime() + now.getTimezoneOffset() * 60000;
-  const moscow = new Date(utc + 3 * 3600000);
-  return { hour: moscow.getHours(), minute: moscow.getMinutes() };
+function scheduleNext() {
+  const m = getMoscowNow();
+  const next = new Date(m);
+  next.setHours(POST_HOUR, 0, 0, 0);
+  if (m >= next) next.setDate(next.getDate() + 1);
+  const ms = next - m;
+  console.log(`Следующий пост через ${Math.round(ms / 60000)} мин`);
+  // пересчитываем каждый раз, чтобы время не уплывало
+  setTimeout(async () => { await postToAll(); scheduleNext(); }, ms);
 }
 
-function scheduleDaily() {
-  const { hour, minute } = getMoscowHour();
-  console.log(`Текущее время МСК: ${hour}:${minute < 10 ? '0' + minute : minute}`);
-  
-  const now = new Date();
-  const utc = now.getTime() + now.getTimezoneOffset() * 60000;
-  const moscow = new Date(utc + 3 * 3600000);
-  
-  let next = new Date(moscow);
-  next.setHours(8, 0, 0, 0);
-  if (moscow >= next) next.setDate(next.getDate() + 1);
-  
-  const msUntilNext = next - moscow;
-  console.log(`Следующий пост через ${Math.round(msUntilNext / 60000)} минут`);
-  
-  setTimeout(() => {
-    postToAll();
-    setInterval(postToAll, 24 * 60 * 60 * 1000);
-  }, msUntilNext);
-}
-
-console.log('🤖 Бот автопостинга запущен');
-scheduleDaily();
-
-// Тестовый запуск если передан аргумент --test
-if (process.argv.includes('--test')) {
-  console.log('Тестовый запуск...');
-  postToAll();
+if (process.argv.includes('--dry')) {
+  postToAll({ dryRun: true });           // только показать пост в логах
+} else {
+  console.log('🤖 Утренний бот запущен');
+  scheduleNext();
+  if (process.argv.includes('--test')) postToAll();
 }
