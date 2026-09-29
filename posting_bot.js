@@ -1,11 +1,11 @@
-// Утренний бот 8:00 МСК для @go_rehab и @Helpforaddicts
+// Утренний бот 8:00 МСК для @go_rehab (РЯХАБ): зависимость и созависимость
 // Формат меняется по дням недели, тема — по дню года (не повторяется ~2 месяца),
 // призыв к действию — не каждый день и в разные места.
 const https = require('https');
 
 const TG_TOKEN = process.env.TG_TOKEN;
 const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
-const CHANNELS = (process.env.CHANNELS || '@go_rehab,@Helpforaddicts').split(',');
+const CHANNELS = (process.env.CHANNELS || '@go_rehab').split(',');
 const DIAG_BOT = process.env.DIAG_BOT || '@ya_lichnost_bot';
 const CONSULT_URL = process.env.CONSULT_URL || 'https://psiholog-petrov.ru';
 const MODEL = process.env.MODEL || 'claude-sonnet-4-6';
@@ -123,7 +123,8 @@ function apiRequest(hostname, path, data) {
 async function generatePost() {
   const { topic, format, cta } = todayPlan();
 
-  const system = `Ты пишешь утренние посты для Telegram-канала Дмитрия Петрова — реабилитолога, который ведёт центр для зависимых. Читатели: зависимые, их близкие, люди в кризисе, верующие и нет. Читают в 8 утра с телефона, полусонные.
+  const system = `Ты пишешь утренние посты для Telegram-канала РЯХАБ Дмитрия Петрова — реабилитолога, который ведёт центр для зависимых. Канал про зависимость и созависимость. Читатели: зависимые (в употреблении, в ремиссии, после срыва) и их близкие — жёны, матери, отцы. Верующие и нет.
+Каждый пост — про зависимость или созависимость: даже если тема утра общая (тревога, стыд, отец, церковь), свяжи её с употреблением, трезвостью, срывом или жизнью рядом с зависимым. Читают в 8 утра с телефона, полусонные.
 
 Голос: как умный друг, который сам через это прошёл и не боится сказать правду. Прямо, на «ты», без пафоса, без утешительства, без проповеди.
 
