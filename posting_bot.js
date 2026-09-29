@@ -10,6 +10,7 @@ const DIAG_BOT = process.env.DIAG_BOT || '@ya_lichnost_bot';
 const CONSULT_URL = process.env.CONSULT_URL || 'https://psiholog-petrov.ru';
 const MODEL = process.env.MODEL || 'claude-sonnet-4-6';
 const POST_HOUR = Number(process.env.POST_HOUR || 8);
+const FEED_CHANNEL = 'ryahab';
 
 // Темы — не абстракции, а узнаваемые утренние ситуации
 const TOPICS = [
@@ -120,8 +121,73 @@ function apiRequest(hostname, path, data) {
   });
 }
 
-async function generatePost() {
-  const { topic, format, cta } = todayPlan();
+// ─────────── ТЕМЫ НЕДЕЛИ ИЗ ПРОГРАММЫ (одобренные в админке) ───────────
+// Если FEED_URL и FEED_KEY не заданы — бот работает по своему списку тем, как раньше.
+const http = require('http');
+const FEED_URL = (process.env.FEED_URL || '').replace(/\/$/, '');   // напр. http://194.67.74.45
+const FEED_KEY = process.env.FEED_KEY || '';
+const OWNER_CHAT_ID = process.env.OWNER_CHAT_ID || '';              // куда слать копию для MAX
+
+function feedRequest(method, path, data) {
+  return new Promise(resolve => {
+    if (!FEED_URL || !FEED_KEY) return resolve(null);
+    const u = new URL(FEED_URL + path);
+    const body = data ? JSON.stringify(data) : '';
+    const lib = u.protocol === 'https:' ? https : http;
+    const req = lib.request({
+      hostname: u.hostname, port: u.port || undefined, path: u.pathname + u.search, method,
+      headers: { 'X-Feed-Key': FEED_KEY, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      timeout: 15000,
+    }, res => {
+      res.setEncoding('utf8');
+      let d = '';
+      res.on('data', c => (d += c));
+      res.on('end', () => { try { resolve(res.statusCode === 200 ? JSON.parse(d) : null); } catch (e) { resolve(null); } });
+    });
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+    req.on('error', e => { console.error('Лента тем недоступна:', e.message); resolve(null); });
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
+// Берёт следующую одобренную тему для канала или null
+async function nextFeedTopic() {
+  const r = await feedRequest('GET', `/api/content-feed/next?channel=${FEED_CHANNEL}`);
+  return r && r.item ? r.item : null;
+}
+
+async function markFeedPublished(item, messageUrl) {
+  if (!item) return;
+  await feedRequest('POST', '/api/content-feed/published', {
+    digestId: item.digestId, index: item.index, channel: FEED_CHANNEL, messageUrl: messageUrl || null,
+  });
+}
+
+function feedPromptBlock(item) {
+  return `Сегодня тема взята из того, что на этой неделе реально всплывало у людей в работе (обобщённо):
+«${item.title}» — ${item.summary || ''}
+${item.question ? 'Вопрос-крючок: ' + item.question : ''}
+Бери только суть. Не цитируй людей, не упоминай программу, центр, резидентов, группу, консультанта; никаких биографических деталей (пол, возраст, сроки, роли вроде «жена», «девушка из программы»). Пиши так, чтобы в этом узнал себя любой читатель канала, а не конкретный человек.`;
+}
+
+// Копия поста тебе в личку — для ручной вставки в MAX
+async function sendMaxCopy(label, text) {
+  if (!OWNER_CHAT_ID) return;
+  await apiRequest('api.telegram.org', `/bot${TG_TOKEN}/sendMessage`, {
+    chat_id: OWNER_CHAT_ID, text: `📋 Для MAX (${label}) — скопируй и вставь:\n\n${text}`,
+  });
+}
+
+function postUrl(channel, result) {
+  const id = result && result.result && result.result.message_id;
+  return id && channel.startsWith('@') ? `https://t.me/${channel.slice(1)}/${id}` : null;
+}
+
+async function generatePost(feedItem) {
+  const plan = todayPlan();
+  const { format, cta } = plan;
+  const topic = feedItem ? feedItem.title : plan.topic;
 
   const system = `Ты пишешь утренние посты для Telegram-канала РЯХАБ Дмитрия Петрова — реабилитолога, который ведёт центр для зависимых. Канал про зависимость и созависимость. Читатели: зависимые (в употреблении, в ремиссии, после срыва) и их близкие — жёны, матери, отцы. Верующие и нет.
 Каждый пост — про зависимость или созависимость: даже если тема утра общая (тревога, стыд, отец, церковь), свяжи её с употреблением, трезвостью, срывом или жизнью рядом с зависимым. Читают в 8 утра с телефона, полусонные.
@@ -138,7 +204,7 @@ async function generatePost() {
 - Запрещённые фразы и их перепевы: ${BANNED.join('; ')}.
 - Не заканчивай утешением. Заканчивай действием, вопросом или честной мыслью.`;
 
-  const user = `Тема утра: «${topic}».
+  const user = `${feedItem ? feedPromptBlock(feedItem) + '\n\n' : ''}Тема утра: «${topic}».
 Формат: ${format.name}. ${format.how}
 Призыв: ${cta}
 
@@ -165,12 +231,19 @@ async function sendToChannel(channelId, text) {
 
 async function postToAll({ dryRun = false } = {}) {
   try {
-    const post = await generatePost();
-    console.log(`[${post.format}] ${post.topic}\n---\n${post.text}\n---`);
+    const feedItem = await nextFeedTopic();
+    const post = await generatePost(feedItem);
+    console.log(`[${post.format}]${feedItem ? ' [тема недели]' : ''} ${post.topic}\n---\n${post.text}\n---`);
     if (dryRun) return;
+    let url = null;
     for (const channel of CHANNELS) {
       const r = await sendToChannel(channel.trim(), post.text);
       console.log(r.ok ? `✅ ${channel}` : `❌ ${channel}: ${r.description}`);
+      if (r.ok && !url) url = postUrl(channel.trim(), r);
+    }
+    if (url) {
+      await markFeedPublished(feedItem, url);
+      await sendMaxCopy('РЯХАБ', post.text);
     }
   } catch (e) {
     console.error('Ошибка:', e.message);
