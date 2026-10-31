@@ -4,11 +4,12 @@
 const https = require('https');
 
 const TG_TOKEN = process.env.TG_TOKEN;
-const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
+const AI_API_KEY = process.env.AI_COMPAT_API_KEY || process.env.VSEGPT_API_KEY;
+const AI_BASE_URL = (process.env.AI_COMPAT_BASE_URL || 'https://api.vsegpt.ru/v1').replace(/\/+$/, '');
+const AI_MODEL = process.env.AI_COMPAT_MODEL || process.env.VSEGPT_MODEL || 'openai/gpt-4.1-mini';
 const CHANNELS = (process.env.CHANNELS || '@go_rehab').split(',');
 const DIAG_BOT = process.env.DIAG_BOT || '@ya_lichnost_bot';
 const CONSULT_URL = process.env.CONSULT_URL || 'https://psiholog-petrov.ru';
-const MODEL = process.env.MODEL || 'claude-sonnet-4-6';
 const POST_HOUR = Number(process.env.POST_HOUR || 8);
 const FEED_CHANNEL = 'ryahab';
 
@@ -96,17 +97,13 @@ function todayPlan() {
   return { topic, format: FORMATS[wd], cta: CTAS[wd] };
 }
 
-function apiRequest(hostname, path, data) {
+function apiRequest(hostname, path, data, extraHeaders = {}) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify(data);
     const opts = {
       hostname, path, method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), ...extraHeaders },
     };
-    if (hostname === 'api.anthropic.com') {
-      opts.headers['x-api-key'] = ANTHROPIC_KEY;
-      opts.headers['anthropic-version'] = '2023-06-01';
-    }
     const req = https.request(opts, res => {
       res.setEncoding('utf8');
       let d = '';
@@ -210,16 +207,18 @@ async function generatePost(feedItem) {
 
 Напиши только текст поста.`;
 
-  const result = await apiRequest('api.anthropic.com', '/v1/messages', {
-    model: MODEL,
+  if (!AI_API_KEY) throw new Error('AI_COMPAT_API_KEY не задан в Railway');
+  const endpoint = new URL(AI_BASE_URL + '/chat/completions');
+  const result = await apiRequest(endpoint.hostname, endpoint.pathname + endpoint.search, {
+    model: AI_MODEL,
     max_tokens: 600,
-    temperature: 1,
-    system,
-    messages: [{ role: 'user', content: user }],
-  });
+    temperature: 0.8,
+    messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+  }, { Authorization: `Bearer ${AI_API_KEY}` });
 
-  if (!result.content) throw new Error('Anthropic: ' + JSON.stringify(result).slice(0, 300));
-  let text = result.content.map(i => i.text || '').join('').trim();
+  if (result.error || !result.choices || !result.choices[0]) throw new Error('VseGPT: ' + JSON.stringify(result).slice(0, 400));
+  let text = String(result.choices[0].message && result.choices[0].message.content || '').trim();
+  if (!text) throw new Error('VseGPT вернул пустой текст');
   text = text.replace(/\*\*/g, '').replace(/#\S+/g, '').trim();
   return { text, topic, format: format.name };
 }
